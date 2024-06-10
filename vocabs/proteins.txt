@@ -24,6 +24,8 @@
 <plogp>
 <lipinski>
 <rxnretro>
+<kdpe>
+<tm>
 _._
 _0_-0_
 _0_-1_

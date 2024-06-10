@@ -32,7 +32,7 @@ from transformers import (
     set_seed,
 )
 
-from terminator.args import CustomTrainingArguments, ModelArguments
+from terminator.args import CustomTrainingArguments, ModelArguments, str2bool
 from terminator.collators import TRAIN_COLLATORS
 from terminator.datasets import get_dataset
 from terminator.tokenization import ExpressionBertTokenizer
@@ -54,15 +54,14 @@ class DataTrainingArguments:
     """
 
     train_data_file: Optional[str] = field(
-        default=None, metadata={"help": "The input training data file (a text file)."}
+        metadata={"help": "The input training data file (a text file)."},
+        default=os.environ["SM_CHANNEL_TRAIN"],
     )
     eval_data_file: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Input evaluation data file to evaluate the perplexity on (a text file)."
-        },
+        metadata={"help": "Input evaluation data file to evaluate the perplexity on (a text file)."},
+        default=os.environ["SM_CHANNEL_EVAL"],
     )
-    line_by_line: bool = field(
+    line_by_line: str2bool = field(
         default=False,
         metadata={
             "help": "Whether lines of text in the dataset are to be handled as distinct samples."
@@ -82,7 +81,7 @@ class DataTrainingArguments:
         default=-1,
         metadata={"help": "Optional input sequence length after tokenization."},
     )
-    overwrite_cache: bool = field(
+    overwrite_cache: str2bool = field(
         default=False,
         metadata={"help": "Overwrite the cached training and evaluation sets"},
     )
@@ -95,6 +94,7 @@ def main():
 
     # Switch off comet
     os.environ["COMET_MODE"] = "DISABLED"
+    # os.environ["WAND_MODE"] = "disabled"
 
     parser = HfArgumentParser(
         (ModelArguments, DataTrainingArguments, CustomTrainingArguments)
@@ -233,6 +233,12 @@ def main():
         # Our input block size will be the max possible for the model
     else:
         data_args.block_size = min(data_args.block_size, tokenizer.max_len)
+
+    # If train/eval data file is a directory, we set the file_path to the first file in the directory
+    if os.path.isdir(data_args.train_data_file):
+        data_args.train_data_file = os.path.join(data_args.train_data_file, os.listdir(data_args.train_data_file)[0])
+    if os.path.isdir(data_args.eval_data_file):
+        data_args.eval_data_file = os.path.join(data_args.eval_data_file, os.listdir(data_args.eval_data_file)[0])
 
     # Get datasets
     train_dataset = (

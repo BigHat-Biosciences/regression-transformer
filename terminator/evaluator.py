@@ -178,7 +178,8 @@ class Evaluator(CustomTrainer):
 
         # Hack for XLNet tokenizer
         self.tokenizer.real_decoder = self.tokenizer.decode
-        self.tokenizer.decode = self.tokenizer.decode_internal
+        if 'decode_internal' in dir(self.tokenizer):
+            self.tokenizer.decode = self.tokenizer.decode_internal
 
         for prop in collator.property_tokens:
 
@@ -287,6 +288,7 @@ class Evaluator(CustomTrainer):
                 bw = 0
                 beam_cols = ["Beam"] if bw == 1 else [f"Beam{i}" for i in range(bw)]
                 search_cols = ["Label", "Greedy", "Sampling"] + beam_cols
+                os.makedirs(os.path.join(save_path, "checkpoint-rmse-min-2400"), exist_ok=True)
                 pd.DataFrame(
                     np.concatenate(
                         [

@@ -9,4 +9,3 @@ dependencies:
     - transformers==v3.1.0
     - -r file:requirements.txt
     - -r file:dev_requirements.txt
-    - -e .
