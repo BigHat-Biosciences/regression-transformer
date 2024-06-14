@@ -2,6 +2,7 @@
 Taken from https://github.com/huggingface/transformers/blob/v3.1.0/src/transformers/trainer.py
 """
 
+import wandb
 import collections
 import gc
 import json
@@ -148,7 +149,7 @@ class CustomTrainer(Trainer):
         self.search = SEARCH_FACTORY[child_kwargs.get("eval_search", "greedy")](
             child_kwargs.get("eval_search_args", {})
         )
-
+        
         self.alternating_collator = child_kwargs.get("alternating_collator", None)
         self.alt_training = self.alternating_collator is not None
         self.save_attention = child_kwargs.get("save_attention", False)
@@ -208,6 +209,10 @@ class CustomTrainer(Trainer):
                     * len(self.alternating_collator.property_tokens),
                     ignore_errors=True,
                 )
+
+        # Setup wandb project
+        if "wandb" in self.args.report_to:
+            wandb.init(project="gt4sd", config=child_kwargs)
 
     def get_alt_train_dataloader(self, collator) -> DataLoader:
         """
@@ -336,10 +341,31 @@ class CustomTrainer(Trainer):
             if self.cc_loss:
                 # Apply cycle-consistency loss
                 cc_loss = self.get_cc_loss(model, inputs, outputs)
+                wandb.log({
+                    "train": {
+                        "cc_loss": cc_loss.item(),
+                        "cg_loss": loss.item()
+                    }
+                }, step=self.global_step)
                 loss += cc_loss * self.cc_loss_weight
+
+            else:
+                wandb.log({
+                    "train": {
+                        "cg_loss": loss.item()
+                    }
+                }, step=self.global_step)
 
             # Overwrite PLM loss with CC loss
             outputs = (loss, *outputs[1:])
+        
+        elif self.alt_training and not self.cg_mode:
+            # We are in the property prediction task
+            wandb.log({
+                "train": {
+                    "pp_loss": outputs[0].item()
+                }
+            }, step=self.global_step)
 
         return outputs
 
@@ -797,7 +823,7 @@ class CustomTrainer(Trainer):
                 self.eval_logs[-1].update(
                     {"epoch": logs["epoch"], "step": self.global_step}
                 )
-
+        
         # Custom logging
         if "loss" in logs.keys():
             # In case of training logging
@@ -1035,10 +1061,10 @@ class CustomTrainer(Trainer):
                     self.cg_mode = self.get_cg_mode(step)
 
                     if self.get_cg_mode(step) > self.get_cg_mode(step - 1):
-                        logger.debug(f"Switching to CG task, took {time()-t:.2f}")
+                        logger.info(f"Switching to CG task, took {time()-t:.2f}")
                         t = time()
                     elif self.get_cg_mode(step) < self.get_cg_mode(step - 1):
-                        logger.debug(f"Switching to PP task, took {time()-t:.2f}")
+                        logger.info(f"Switching to PP task, took {time()-t:.2f}")
                         t = time()
 
                     if self.cg_mode:
@@ -1079,13 +1105,20 @@ class CustomTrainer(Trainer):
                         )
                         logging_loss_scalar = tr_loss_scalar
 
-                        self.log(logs)
+                        # self.log(logs)
+                        wandb.log(data={
+                            'train': {
+                                'global_loss': logs["loss"],
+                                'learning_rate': logs["learning_rate"],
+                            },
+                        }, step=self.global_step)
 
                     if (
                         self.args.evaluation_strategy
                         and self.global_step % self.args.eval_steps == 0
                     ):
                         self.property_evaluate()
+                        
                     if (
                         self.args.save_steps > 0
                         and self.global_step % self.args.save_steps == 0
@@ -1253,6 +1286,14 @@ class CustomTrainer(Trainer):
                 with open(save_path, "w") as f:
                     json.dump({"rmse": rs[0], "pearson": ps[0], "spearman": ss[0]}, f)
                 logger.info(f"New best spearman: {ss[0]}")
+
+            wandb.log({
+                "val": {
+                    f"pp_RMSE_{prop[1:-1]}": rs[0],
+                    f"pp_Pearson_{prop[1:-1]}": ps[0],
+                    f"pp_Spearman_{prop[1:-1]}": ss[0],
+                }
+            }, step=self.global_step)
 
             self.perfs[pidx, 0, self.cidx] = ps[0]
             self.perfs[pidx, 1, self.cidx] = rs[0]

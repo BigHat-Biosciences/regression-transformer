@@ -173,7 +173,7 @@ class Evaluator(CustomTrainer):
         eval_dataloader = self.get_custom_dataloader(collator)
 
         for prop in collator.property_tokens:
-
+            
             # Forward pass
             logits, label_ids, metrics, input_ids = self.prediction_loop(
                 dataloader=eval_dataloader,
