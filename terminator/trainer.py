@@ -676,6 +676,8 @@ class CustomTrainer(Trainer):
                     and step % 100 == 0
                 ):
                     logger.debug("Switching to CG task")
+                    torch.cuda.empty_cache()
+                    gc.collect()
                 if self.cg_mode:
                     inputs = a_inputs
 

@@ -18,11 +18,12 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 class Search(nn.Module):
     """Base search class."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, mask=None, *args, **kwargs):
         super().__init__()
         if args != () or kwargs != {}:
             logger.warning(f"Ignoring args: {args} and kwargs: {kwargs}")
         self.device = get_device()
+        self.mask = mask
 
     def forward(self, logits: torch.Tensor) -> object:
         """
@@ -38,6 +39,8 @@ class Search(nn.Module):
             raise ValueError(f"Logits need to be 3D Tensor, was: {logits.shape}")
         if not type(logits) == torch.Tensor:
             raise TypeError(f"Logits need to be torch.Tensor, was: {type(logits)}")
+        if self.mask is not None:
+            logits[:,:,~self.mask] = -torch.inf
 
     def step(self, logits: torch.Tensor) -> object:
         """
@@ -53,7 +56,8 @@ class Search(nn.Module):
             raise ValueError(f"Logits need to be 2D or 3D Tensor, was: {logits.shape}")
         if not type(logits) == torch.Tensor:
             raise TypeError(f"Logits need to be torch.Tensor, was: {type(logits)}")
-
+        if self.mask is not None:
+            logits[self.mask] = -float_info.max
 
 class GreedySearch(Search):
     """ "Greedy search."""
