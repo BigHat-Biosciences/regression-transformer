@@ -113,10 +113,15 @@ class RegressionTransformerTrainingPipeline():
                     property_tokens=self.properties,
                     plm_probability=training_args["plm_probability"],
                     max_span_length=training_args["max_span_length"],
-                    do_sample=False,
                     entity_separator_token=training_args["entity_separator_token"],
                     mask_entity_separator=training_args["mask_entity_separator"],
                     entity_to_mask=training_args["entity_to_mask"],
+                    do_sample=True,
+                    placeholder_sample_weight=0.001,    # TODO: Either add cosine schedule or set to ratio of display/oas
+                    property_value_ranges=[
+                        [p.minimum, p.maximum]
+                        for p in self.property_objects.values()
+                    ],
                 )
 
             # Initialize our Trainer

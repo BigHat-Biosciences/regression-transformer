@@ -28,6 +28,7 @@ from transformers.trainer_utils import (
     EvalPrediction,
     PredictionOutput,
     TrainOutput,
+    has_length,
     set_seed,
 )
 from transformers.utils import logging
@@ -168,7 +169,7 @@ class CustomTrainer(Trainer):
                 self.alt_eval_loader = self.get_alt_eval_dataloader(
                     collator=self.alternating_collator
                 )
-
+            
             # Sanity checks
             self.alternate_steps = self.train_config.get("alternate_steps", 8)
             if (
@@ -213,6 +214,10 @@ class CustomTrainer(Trainer):
         # Setup wandb project
         if "wandb" in self.args.report_to:
             wandb.init(project="gt4sd", config=child_kwargs)
+
+    def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
+        # TODO: Override with weighted random sampler to upsample display sequences wrt. oas sequences
+        return super()._get_train_sampler()
 
     def get_alt_train_dataloader(self, collator) -> DataLoader:
         """

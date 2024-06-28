@@ -21,7 +21,7 @@ python -m pdb run_train.py \
 	--batch_size 16 \
 	--eval_steps 5 \
 	--logging_steps 100 \
-	--alternate_steps 50 \
+	--alternate_steps 1 \
 	--gradient_accumulation_steps 1 \
 	--eval_accumulation_steps 1 \
 	--cc_loss_weight 1 \

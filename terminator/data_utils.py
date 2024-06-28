@@ -15,6 +15,7 @@ from transformers.training_args import TrainingArguments
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+PLACEHOLDER_PROP_VALUE = 999
 TRANSFORM_FACTORY = {"SELFIES": encoder}
 AUGMENT_FACTORY = {
     "SMILES": Augment(),
@@ -42,11 +43,14 @@ class Property:
             val = float(prop)
         except ValueError:
             logger.error(f"Could not convert property {prop} in {line} to float.")
+        
+        self.mask_lengths.append(len(prop))
+        
+        if val == PLACEHOLDER_PROP_VALUE: return
         if val < self.minimum:
             self.minimum = val
         elif val > self.maximum:
             self.maximum = val
-        self.mask_lengths.append(len(prop))
 
     @property
     def mask_length(self) -> int:

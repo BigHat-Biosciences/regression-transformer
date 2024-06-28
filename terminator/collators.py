@@ -10,6 +10,7 @@ from transformers.tokenization_utils_base import BatchEncoding
 from transformers.utils import logging
 
 from .collator_utils import get_mask, get_permutation_order
+from .data_utils import PLACEHOLDER_PROP_VALUE
 
 logger = logging.get_logger(__name__)
 
@@ -410,6 +411,10 @@ class SinglePropertyCollator(BaseCollator):
             end_mask = matches[1].int()
 
             for i in range(masked_indices.shape[0]):
+                realprop = self.tokenizer.floating_tokens_to_float(
+                    self.tokenizer.decode(inputs[i, start_mask[i] : end_mask[i]]).split(" ")
+                )
+                if realprop == PLACEHOLDER_PROP_VALUE: continue
                 masked_indices[i, start_mask[i] : end_mask[i]] = 1
                 target_mapping[i] = torch.eye(labels.size(1), device=device)
         else:
@@ -437,7 +442,7 @@ class PropertyCollator(SinglePropertyCollator):
     """Collator class to parse samples for property prediction task.
     NOTE: This can handle multiple properties
     """
-
+    
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
@@ -721,7 +726,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
     the properties with sampled values.
     NOTE: This collator can deal with multiple properties.
     """
-
+    
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
@@ -729,6 +734,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
         plm_probability: float = 1 / 6,
         max_span_length: int = 5,
         do_sample: bool = False,
+        placeholder_sample_weight: float = 0.0,
         property_value_ranges: Optional[Iterable[Iterable[float]]] = None,
         **kwargs,
     ):
@@ -746,6 +752,8 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                 uniformally from [1, max_span_length]. Defaults to 5.
             do_sample (bool, optional): Whether or not the properties should be
                 left untouched (default) or imputed for conditional generation.
+            placeholder_sample_weight (float, optional): The weight of samples that
+                have a placeholder for the property. Defaults to 0.0.
             property_value_ranges (Iterable, optional): Only needed if do_sample
              is True. In this case this should be an array of length equal to number
              of properties in dataset (which should be constant for all samples!). The
@@ -759,6 +767,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
         self.plm_probability = plm_probability
         self.max_span_length = max_span_length
         self.do_sample = do_sample
+        self.placeholder_sample_weight = placeholder_sample_weight
 
         self.property_tokens = property_tokens
         self.num_props = len(property_tokens)
@@ -928,7 +937,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
             # Mask from property til next separator (samples w/o property are not masked)
             for i, (prow, pcol) in enumerate(zip(property_matches, property_token_pos)):
                 # First, extract true property
-
+                
                 # Find all separators in current sample, then find the next one
                 separator_idxs = separator_token_pos[
                     torch.where(separator_matches == prow)
@@ -939,7 +948,11 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                     self.tokenizer.decode(inputs[prow, pcol + 1 : sep_idx]).split(" ")
                 )
                 real_property[prow, pidx] = realprop
-                if self.do_sample:
+
+                assert realprop != PLACEHOLDER_PROP_VALUE or self.do_sample,\
+                    f"Found placeholder property {prop_token}={realprop} but do_sample is False."
+                
+                if self.do_sample or realprop == PLACEHOLDER_PROP_VALUE:
                     # Sample property and fill it in
                     num_digits = sep_idx - (pcol + 1)
                     sampled_prop = sample(realprop)  # ignored in the base class
@@ -955,13 +968,17 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                         2 : torch.where(new_tokens == self.separator_token_idx)[0]
                     ]
                     inputs[prow, pcol + 1 : sep_idx] = new_tokens
-                    # Compute a sample weight between -1 and 1. 1 means sampled was very
-                    # similar to real property, -1 means it was very distinct. Can
-                    # be used to scale the loss of each sample.
-                    sample_weights[prow, pidx] = self.get_sample_weight(
-                        realprop, sampled_prop, property_range
-                    )
-
+                    
+                    if realprop == PLACEHOLDER_PROP_VALUE:
+                        sample_weights[prow, pidx] = self.placeholder_sample_weight
+                    else:
+                        # Compute a sample weight between -1 and 1. 1 means sampled was very
+                        # similar to real property, -1 means it was very distinct. Can
+                        # be used to scale the loss of each sample.
+                        sample_weights[prow, pidx] = self.get_sample_weight(
+                            realprop, sampled_prop, property_range
+                        )
+        
         return inputs, real_property, sample_weights.mean(axis=-1)
 
     def get_sample_weight(
@@ -979,7 +996,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
             prop_range (float): Range of possible properties (max-min).
 
         Returns:
-            float: Sample weight.
+            float: Sample weight between -1 and 1
         """
         return 2 * ((-1 * (abs(real_prop - sampled_prop) / prop_range)) + 1) - 1
 
@@ -1095,9 +1112,9 @@ class MultiEntityCGTrainCollator(ConditionalGenerationTrainCollator):
 
 
 TRAIN_COLLATORS = {
-    "property": PropertyCollator,
-    "vanilla_cg": ConditionalGenerationTrainCollator,
-    "multientity_cg": MultiEntityCGTrainCollator,
+    "property": PropertyCollator,                               # Collates data for property prediction task
+    "vanilla_cg": ConditionalGenerationTrainCollator,           # Collates data for conditional generation task
+    "multientity_cg": MultiEntityCGTrainCollator,               # Collates data for multi-entity conditional generation task
 }
 EVAL_COLLATORS = {
     "property": PropertyCollator,
