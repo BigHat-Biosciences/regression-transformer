@@ -341,31 +341,34 @@ class CustomTrainer(Trainer):
             if self.cc_loss:
                 # Apply cycle-consistency loss
                 cc_loss = self.get_cc_loss(model, inputs, outputs)
-                wandb.log({
-                    "train": {
-                        "cc_loss": cc_loss.item(),
-                        "cg_loss": loss.item()
-                    }
-                }, step=self.global_step)
-                loss += cc_loss * self.cc_loss_weight
+                if wandb.run is not None:
+                    wandb.log({
+                        "train": {
+                            "cc_loss": cc_loss.item(),
+                            "cg_loss": loss.item()
+                        }
+                    }, step=self.global_step)
+                    loss += cc_loss * self.cc_loss_weight
 
             else:
-                wandb.log({
-                    "train": {
-                        "cg_loss": loss.item()
-                    }
-                }, step=self.global_step)
+                if wandb.run is not None:
+                    wandb.log({
+                        "train": {
+                            "cg_loss": loss.item()
+                        }
+                    }, step=self.global_step)
 
             # Overwrite PLM loss with CC loss
             outputs = (loss, *outputs[1:])
         
         elif self.alt_training and not self.cg_mode:
             # We are in the property prediction task
-            wandb.log({
-                "train": {
-                    "pp_loss": outputs[0].item()
-                }
-            }, step=self.global_step)
+            if wandb.run is not None:
+                wandb.log({
+                    "train": {
+                        "pp_loss": outputs[0].item()
+                    }
+                }, step=self.global_step)
 
         return outputs
 
@@ -953,6 +956,7 @@ class CustomTrainer(Trainer):
 
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
+            breakpoint()
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
                 device_ids=[self.args.local_rank],
@@ -1108,12 +1112,14 @@ class CustomTrainer(Trainer):
                         logging_loss_scalar = tr_loss_scalar
 
                         # self.log(logs)
-                        wandb.log(data={
-                            'train': {
-                                'global_loss': logs["loss"],
-                                'learning_rate': logs["learning_rate"],
-                            },
-                        }, step=self.global_step)
+                        # check if wandb is enabled
+                        if wandb.run is not None: 
+                            wandb.log(data={
+                                'train': {
+                                    'global_loss': logs["loss"],
+                                    'learning_rate': logs["learning_rate"],
+                                },
+                            }, step=self.global_step)
 
                     if (
                         self.args.evaluation_strategy
@@ -1289,13 +1295,14 @@ class CustomTrainer(Trainer):
                     json.dump({"rmse": rs[0], "pearson": ps[0], "spearman": ss[0]}, f)
                 logger.info(f"New best spearman: {ss[0]}")
 
-            wandb.log({
-                "val": {
-                    f"pp_RMSE_{prop[1:-1]}": rs[0],
-                    f"pp_Pearson_{prop[1:-1]}": ps[0],
-                    f"pp_Spearman_{prop[1:-1]}": ss[0],
-                }
-            }, step=self.global_step)
+            if wandb.run is not None:
+                wandb.log({
+                    "val": {
+                        f"pp_RMSE_{prop[1:-1]}": rs[0],
+                        f"pp_Pearson_{prop[1:-1]}": ps[0],
+                        f"pp_Spearman_{prop[1:-1]}": ss[0],
+                    }
+                }, step=self.global_step)
 
             self.perfs[pidx, 0, self.cidx] = ps[0]
             self.perfs[pidx, 1, self.cidx] = rs[0]

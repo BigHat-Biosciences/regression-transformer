@@ -1,6 +1,9 @@
-transformers>=4.2.1
-torch>=1.7.1
+transformers==4.30.2
+torch==1.13.1
 tqdm
 numpy
 modlamp>=4.3.0
-selfies>=0.2.4,<=1.0.0
+selfies==0.2.4
+wandb==0.17.3
+rdkit-pypi==2021.3.5
+pytoda @ git+https://git@github.com/PaccMann/paccmann_datasets@72ad890ba50af67817c0bec6f9fd812c1f91e9a6

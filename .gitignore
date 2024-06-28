@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Local files
+wandb/
+secrets.env
+
 # C extensions
 *.so
 
