@@ -147,6 +147,10 @@ class DataTrainingArguments:
             "text) and an arbitrary number of numerical columns."
         },
     )
+    train_metadata_path: str = field(
+        default=None,
+        metadata={"help": "Path to a `.csv` file with metadata columns for the training data."},
+    )
     test_data_path: str = field(
         default="test.csv",
         metadata={
@@ -154,6 +158,10 @@ class DataTrainingArguments:
             "contain a `text` column (with the string input, e.g, SMILES, AAS, natural "
             "text) and an arbitrary number of numerical columns."
         },
+    )
+    test_metadata_path: str = field(
+        default=None,
+        metadata={"help": "Path to a `.csv` file with metadata columns for the testing data."},
     )
     block_size: int = field(
         default=-1,

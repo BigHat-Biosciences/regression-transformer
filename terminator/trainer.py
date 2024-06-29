@@ -19,8 +19,10 @@ import torch
 from packaging import version
 from torch import nn
 from torch.nn import CrossEntropyLoss
+from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data.sampler import WeightedRandomSampler
 from tqdm.auto import tqdm, trange
 from transformers import Trainer
 from transformers.trainer_utils import (
@@ -155,6 +157,10 @@ class CustomTrainer(Trainer):
         self.alt_training = self.alternating_collator is not None
         self.save_attention = child_kwargs.get("save_attention", False)
 
+        # Train and test metadata for things like sampling weights
+        self.train_metadata = child_kwargs.get("train_metadata", None)
+        self.eval_metadata = child_kwargs.get("eval_metadata", None)
+
         # Whether we train regular PLM or alternating (PP vs. CD)
         if self.alt_training:
 
@@ -194,6 +200,7 @@ class CustomTrainer(Trainer):
                 )
 
             self.cc_loss_weight = self.train_config.get("cc_loss_weight", 1)
+            self.cc_loss_weight_initial = self.cc_loss_weight
             self.cc_loss = self.train_config.get("cc_loss", False)
 
             # Implement sample-weighted loss function
@@ -216,8 +223,14 @@ class CustomTrainer(Trainer):
             wandb.init(project="gt4sd", config=child_kwargs)
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
-        # TODO: Override with weighted random sampler to upsample display sequences wrt. oas sequences
-        return super()._get_train_sampler()
+        if not self.train_metadata or "weights" not in self.train_metadata:
+            return super()._get_train_sampler()
+        
+        if self.train_dataset is None or not has_length(self.train_dataset):
+            return None
+        
+        weights = torch.tensor(self.train_metadata["weights"], dtype=torch.float32)
+        return WeightedRandomSampler(weights, len(self.train_dataset), replacement=True)
 
     def get_alt_train_dataloader(self, collator) -> DataLoader:
         """
@@ -239,6 +252,7 @@ class CustomTrainer(Trainer):
             sampler=self._get_train_sampler(),
             collate_fn=collator,
             drop_last=self.args.dataloader_drop_last,
+            shuffle=False,
         )
 
     def get_alt_eval_dataloader(self, collator) -> DataLoader:
@@ -346,15 +360,21 @@ class CustomTrainer(Trainer):
             if self.cc_loss:
                 # Apply cycle-consistency loss
                 cc_loss = self.get_cc_loss(model, inputs, outputs)
+                weighted_loss = self.cc_loss_weight * cc_loss + (1 - self.cc_loss_weight) * loss
+
                 if wandb.run is not None:
                     wandb.log({
                         "train": {
                             "cc_loss": cc_loss.item(),
-                            "cg_loss": loss.item()
+                            "cg_loss": loss.item(),
+                            "weighted_cc_loss": self.cc_loss_weight * cc_loss.item(),
+                            "weighted_cg_loss": (1 - self.cc_loss_weight) * loss.item(),
+                            "g_loss": weighted_loss.item(),
+                            "cc_loss_weight": self.cc_loss_weight,
                         }
                     }, step=self.global_step)
-                    loss += cc_loss * self.cc_loss_weight
-
+                
+                loss = weighted_loss
             else:
                 if wandb.run is not None:
                     wandb.log({
@@ -753,7 +773,7 @@ class CustomTrainer(Trainer):
         if self.args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
             delattr(self, "_past")
-
+        
         # Gather all remaining tensors and put them back on the CPU
         eval_losses_gatherer.add_arrays(
             self._gather_and_numpify(losses_host, "eval_losses")
@@ -770,7 +790,7 @@ class CustomTrainer(Trainer):
         preds = preds_gatherer.finalize()
         label_ids = labels_gatherer.finalize()
         input_ids = inputs_gatherer.finalize()
-
+        
         if (
             self.compute_metrics is not None
             and preds is not None
@@ -940,6 +960,10 @@ class CustomTrainer(Trainer):
 
         self.create_optimizer_and_scheduler(num_training_steps=t_total)
 
+        # Setup cosine annealing schedule for the cc_loss_weight
+        if self.alt_training and self.cc_loss:
+            self.cc_scheduler = lambda step: (1.0 - self.cc_loss_weight_initial) * 0.5 * (1 - np.cos(np.pi * step / self.args.max_steps))
+
         # Check if saved optimizer or scheduler states exist
         if (
             model_path is not None
@@ -961,7 +985,6 @@ class CustomTrainer(Trainer):
 
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
-            breakpoint()
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
                 device_ids=[self.args.local_rank],
@@ -1097,6 +1120,7 @@ class CustomTrainer(Trainer):
                     model.zero_grad()
                     torch.cuda.empty_cache()
                     self.global_step += 1
+                    self.cc_loss_weight = self.cc_scheduler(self.global_step)
                     self.epoch = epoch + (step + 1) / len(epoch_iterator)
                     logs: Dict[str, float] = {}
 
@@ -1117,20 +1141,21 @@ class CustomTrainer(Trainer):
                         logging_loss_scalar = tr_loss_scalar
 
                         # self.log(logs)
-                        # check if wandb is enabled
-                        if wandb.run is not None: 
-                            wandb.log(data={
-                                'train': {
-                                    'global_loss': logs["loss"],
-                                    'learning_rate': logs["learning_rate"],
-                                },
-                            }, step=self.global_step)
 
                     if (
                         self.args.evaluation_strategy
                         and self.global_step % self.args.eval_steps == 0
                     ):
                         self.property_evaluate()
+                        self.generation_evaluate()
+
+                        if wandb.run is not None:
+                            wandb.log({
+                                'train': {
+                                    'global_loss': logs["loss"],
+                                    'learning_rate': logs["learning_rate"],
+                                },
+                            }, step=self.global_step)
                         
                     if (
                         self.args.save_steps > 0
@@ -1203,6 +1228,51 @@ class CustomTrainer(Trainer):
                 CG optimization) or vanilla training (PP optimization).
         """
         return (x // self.alternate_steps) % 2 == 1
+
+    def generation_evaluate(self):
+        from terminator.evaluator import Evaluator
+
+        try:
+            properties = self.data_collator.property_tokens
+        except AttributeError:
+            warnings.warn("Collator was not passed explicit properties")
+            return
+
+        # We can only support single property evaluation for now
+        assert len(properties) == 1
+        prop = properties[0]
+        
+        evaluator = Evaluator(
+            model=self.model,
+            args=self.args,
+            eval_params={},
+            eval_dataset=self.eval_dataset,
+            tokenizer=self.tokenizer,
+            prediction_loss_only=False,
+        )
+        
+        property_collator = TRAIN_COLLATORS["property"](
+            tokenizer=self.tokenizer,
+            property_tokens=properties,
+            num_tokens_to_mask=[-1],
+        )
+        p, s, rmse, perp =  evaluator.conditional_generation(
+            self.alternating_collator,
+            save_path = None,
+            passed_eval_fn = None,                  # We should eventually pass in BigHat Tm oracle for custom eval
+            property_collator = property_collator,
+            denormalize_params = None,
+        )            
+
+        if wandb.run is not None:
+            wandb.log({
+                "val": {
+                    f"cg_RMSE_{prop[1:-1]}": rmse,
+                    f"cg_Pearson_{prop[1:-1]}": p,
+                    f"cg_Spearman_{prop[1:-1]}": s,
+                    f"cg_Perplexity_{prop[1:-1]}": perp,
+                }
+            }, step=self.global_step)
 
     def property_evaluate(self):
         from terminator.evaluator import Evaluator

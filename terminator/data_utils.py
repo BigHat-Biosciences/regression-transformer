@@ -114,6 +114,7 @@ def prepare_datasets_from_files(
     train_path: str,
     test_path: str,
     augment: int = 0,
+    shuffle_df: bool = True,
 ) -> Tuple[ExpressionBertTokenizer, Dict[str, Property], List[str], List[str]]:
     """
     Converts datasets saved in provided `.csv` paths into RT-compatible datasets.
@@ -149,7 +150,8 @@ def prepare_datasets_from_files(
             raise TypeError(f"Please provide a csv file not {path}.")
 
         # Load data
-        df = shuffle(pd.read_csv(path))
+        df = pd.read_csv(path)
+        if shuffle_df: df = shuffle(df)
         if "text" not in df.columns:
             raise ValueError("Please provide text in the `text` column.")
 

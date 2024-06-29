@@ -77,7 +77,7 @@ class RegressionTransformerTrainingPipeline():
             self.setup_model(params)
 
             # Register training_dataset and eval_dataset
-            self.train_dataset, self.test_dataset = self.setup_dataset(**params)
+            self.train_dataset, self.test_dataset, self.train_metadata, self.test_metadata = self.setup_dataset(**params)
             logger.info(
                 f"# samples: {len(self.train_dataset)}, {len(self.test_dataset)}."
             )
@@ -116,8 +116,8 @@ class RegressionTransformerTrainingPipeline():
                     entity_separator_token=training_args["entity_separator_token"],
                     mask_entity_separator=training_args["mask_entity_separator"],
                     entity_to_mask=training_args["entity_to_mask"],
-                    do_sample=True,
-                    placeholder_sample_weight=0.001,    # TODO: Either add cosine schedule or set to ratio of display/oas
+                    do_sample=False,
+                    placeholder_sample_weight=1.0,
                     property_value_ranges=[
                         [p.minimum, p.maximum]
                         for p in self.property_objects.values()
@@ -159,6 +159,8 @@ class RegressionTransformerTrainingPipeline():
                 data_collator=data_collator,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.test_dataset,
+                train_metadata=self.train_metadata,
+                eval_metadata=self.test_metadata,
                 tokenizer=self.tokenizer,
                 alternating_collator=alternating_collator,
                 train_config=train_config,
@@ -275,6 +277,8 @@ class RegressionTransformerTrainingPipeline():
         data_dir: str,
         train_data_path: str,
         test_data_path: str,
+        train_metadata_path: str = None,
+        test_metadata_path: str = None,
         augment: int = 0,
         save_datasets: bool = False,
         *args,
@@ -303,7 +307,7 @@ class RegressionTransformerTrainingPipeline():
         test_data_path = os.path.join(data_dir, test_data_path)
 
         tokenizer, properties, train_data, test_data = prepare_datasets_from_files(
-            self.tokenizer, train_data_path, test_data_path, augment=augment
+            self.tokenizer, train_data_path, test_data_path, augment=augment, shuffle_df=False
         )
         self.tokenizer, self.property_objects = tokenizer, properties
         self.properties = list(properties.keys())
@@ -319,8 +323,18 @@ class RegressionTransformerTrainingPipeline():
             test_data,
             save_path=test_data_path.replace(".csv", ".txt") if save_datasets else None,
         )
+
+        train_metadata, test_metadata = {}, {}
+        if train_metadata_path:
+            import pandas as pd
+            train_metadata_path = os.path.join(data_dir, train_metadata_path)
+            train_metadata_df = pd.read_csv(train_metadata_path)
+            for col in train_metadata_df.columns:
+                assert len(train_metadata_df) == len(train_dataset)
+                train_metadata[col] = train_metadata_df[col].values
+
         logger.info("Finished data setup.")
-        return train_dataset, test_dataset
+        return train_dataset, test_dataset, train_metadata, test_metadata
 
     def create_dataset_from_list(
         self, data: List[str], save_path: Optional[str] = None
@@ -354,6 +368,10 @@ class RegressionTransformerTrainingPipeline():
     
 
 if __name__ == "__main__":
+    import debugpy
+    debugpy.listen(5678)
+    print("Waiting for debugger attach...")
+    debugpy.wait_for_client()
     
     parser = HfArgumentParser(
         (ModelArguments, DataTrainingArguments, CustomTrainingArguments)

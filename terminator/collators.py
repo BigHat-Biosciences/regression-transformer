@@ -734,6 +734,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
         plm_probability: float = 1 / 6,
         max_span_length: int = 5,
         do_sample: bool = False,
+        do_sample_for_placeholder: bool = True,
         placeholder_sample_weight: float = 0.0,
         property_value_ranges: Optional[Iterable[Iterable[float]]] = None,
         **kwargs,
@@ -752,6 +753,8 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                 uniformally from [1, max_span_length]. Defaults to 5.
             do_sample (bool, optional): Whether or not the properties should be
                 left untouched (default) or imputed for conditional generation.
+            do_sample_for_placeholder (bool, optional): Whether or not to sample 
+                properties when the sequence contains a placeholder. Defaults to True.
             placeholder_sample_weight (float, optional): The weight of samples that
                 have a placeholder for the property. Defaults to 0.0.
             property_value_ranges (Iterable, optional): Only needed if do_sample
@@ -767,13 +770,14 @@ class ConditionalGenerationTrainCollator(BaseCollator):
         self.plm_probability = plm_probability
         self.max_span_length = max_span_length
         self.do_sample = do_sample
+        self.do_sample_for_placeholder = do_sample_for_placeholder
         self.placeholder_sample_weight = placeholder_sample_weight
 
         self.property_tokens = property_tokens
         self.num_props = len(property_tokens)
         self.property_token_idxs = [tokenizer.vocab[p] for p in property_tokens]
 
-        if self.do_sample:
+        if self.do_sample or self.do_sample_for_placeholder:
             if not property_value_ranges:
                 raise TypeError("property_value_ranges not provided for sampling.")
 
@@ -920,7 +924,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
             self.pidx = pidx
 
             # Set property values/ranges
-            if self.do_sample:
+            if self.do_sample or self.do_sample_for_placeholder:
                 sample = self.sampling_functions[pidx]
                 prop_values = self.property_value_ranges[pidx]
                 property_range = abs(prop_values[1] - prop_values[0])
@@ -949,10 +953,10 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                 )
                 real_property[prow, pidx] = realprop
 
-                assert realprop != PLACEHOLDER_PROP_VALUE or self.do_sample,\
-                    f"Found placeholder property {prop_token}={realprop} but do_sample is False."
+                assert realprop != PLACEHOLDER_PROP_VALUE or self.do_sample_for_placeholder,\
+                    f"Found placeholder property {prop_token}={realprop} but do_sample_for_placeholder is False."
                 
-                if self.do_sample or realprop == PLACEHOLDER_PROP_VALUE:
+                if self.do_sample or (self.do_sample_for_placeholder and realprop == PLACEHOLDER_PROP_VALUE):
                     # Sample property and fill it in
                     num_digits = sep_idx - (pcol + 1)
                     sampled_prop = sample(realprop)  # ignored in the base class

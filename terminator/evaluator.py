@@ -302,6 +302,7 @@ class Evaluator(CustomTrainer):
     ):
         """
         Function to evaluate conditional generation
+        NOTE: This only supports a single property at the moment.
         Args:
             collator (): PyTorch collator object
             save_path (str): Path where results are saved, defaults to None (no saving).
@@ -321,7 +322,7 @@ class Evaluator(CustomTrainer):
             )
 
         eval_dataloader = self.get_custom_dataloader(collator, bs=2)
-        prop = collator.property_token[1:-1]
+        prop = collator.property_tokens[0][1:-1]
 
         if passed_eval_fn is not None:
             eval_fn = passed_eval_fn
@@ -337,6 +338,7 @@ class Evaluator(CustomTrainer):
         else:
             denormalize = lambda x: x
 
+        # Local cache to store property predictions for sequences
         seq_to_prop = {}
 
         # Forward pass
@@ -348,18 +350,19 @@ class Evaluator(CustomTrainer):
             pop_and_return_keys=["real_property", "sample_weights"],
             pad_idx=self.tokenizer.vocab["[PAD]"],
         )
+        
         logits = torch.Tensor(logits).cpu()
         input_ids = torch.Tensor(input_ids)
-        # Arbitrary rounding set here
-        real_prop = [round(denormalize(x), 4) for x in returned["real_property"]]
+        # Arbitrary rounding set here on x[0] which is the first property
+        real_prop = [round(denormalize(x[0]), 4) for x in returned["real_property"]]
 
         # Naive search (using all tokens)
         t = time()
         greedy_preds = self.greedy_search(logits).unsqueeze(0)
-        logger.error(f"Greedy search took {time() - t}")
+        logger.info(f"Greedy search took {time() - t}")
         t = time()
         sampling_preds = self.sampling_search(logits).unsqueeze(0)
-        logger.error(f"Sampling search took {time() - t}")
+        logger.info(f"Sampling search took {time() - t}")
         # Just needed for reference
         bw = self.beam_search.beam_width
         beam_preds = torch.cat([greedy_preds] * bw, dim=0)
@@ -377,7 +380,7 @@ class Evaluator(CustomTrainer):
             beam_preds[:, sample_idx, keep_pos] = (
                 beams.squeeze(dim=0).permute(1, 0).long()
             )
-        print(f"Beam search took {time() - t}")
+        logger.info(f"Beam search took {time() - t}")
 
         all_preds = torch.zeros(2 + beam_preds.shape[0], *logits.shape[:2]).long()
         all_preds[0, :, :] = greedy_preds
@@ -396,10 +399,13 @@ class Evaluator(CustomTrainer):
         prop_dicts = []
 
         for idx, predictions in tqdm(enumerate(all_preds), desc="Evaluating search"):
+            # They are running evaluation across all three sampling methods which are greedy, sampling and beam search
+            # TODO: I could probably just keep the sampling search or implement my denoising search and keep it at that
+            
             for sidx, (x, y, yhat) in tqdm(
                 enumerate(zip(input_ids, label_ids, predictions))
             ):
-
+                # x => tokenized input sequence, y => tokenized label sequence, yhat => tokenized prediction sequence
                 cidx = idx * len(predictions) + sidx
                 assert len(x) == len(y), "Input and label lengths do not match"
                 assert len(x) == len(yhat), "Input and predictions do not match"
@@ -415,18 +421,18 @@ class Evaluator(CustomTrainer):
                 assert len(x_tokens) == len(
                     y_tokens
                 ), f"I/O lengths must match  {len(x_tokens)} and {len(y_tokens)}"
-                # Get property primer (float)
+                # Get property primer (float), replaces masked tokens in input sequence with the true labeled property
                 label = self.tokenizer.get_sample_label(y_tokens, x_tokens)
-                # Get prediction (float)
+                # Get prediction (float), replaces masked tokens in input sequence with the predicted property
                 gen = self.tokenizer.get_sample_prediction(yhat_tokens, x_tokens)
-                orgseq, target_prop = self.tokenizer.aggregate_tokens(
+                orgseq, target_prop = self.tokenizer.aggregate_tokens(  # Gets parsed orig sequence and property
                     label, label_mode=True
                 )
-                original_seqs[cidx] = orgseq.split("|")[-1]
+                original_seqs[cidx] = orgseq.split("|")[-1]                         # fills in the original sequence
 
-                genseq, _ = self.tokenizer.aggregate_tokens(gen, label_mode=False)
-                generated_seqs[cidx] = genseq.split("|")[-1]
-                gen_seq = self.tokenizer.to_readable(generated_seqs[cidx])
+                genseq, _ = self.tokenizer.aggregate_tokens(gen, label_mode=False)  # Gets parsed generated sequence
+                generated_seqs[cidx] = genseq.split("|")[-1]                        # fills in the generated sequence
+                gen_seq = self.tokenizer.to_readable(generated_seqs[cidx])          
 
                 # Checking whether molecule was already predicted
                 if gen_seq in seq_to_prop.keys():
@@ -446,14 +452,18 @@ class Evaluator(CustomTrainer):
                 property_generations[cidx] = value
                 property_primers[cidx] = denormalize(target_prop[prop])
 
-        pg = property_generations[property_generations != -1]
-        print(f"Ratio of invalid sequences: {round(1 - (len(pg)/array_len),2)}")
-        pp = property_primers[property_generations != -1]
+        pg = property_generations[property_generations != -1]                       # All the predicted properties for sampled sequences
+        print(f"Ratio of invalid sequences: {round(1 - (len(pg)/array_len),2)}")    # Ratio of invalid sequences
+        pp = property_primers[property_generations != -1]                           # Filter out invalid predictions
         p = pearsonr(pp, pg)
         s = spearmanr(pp, pg)
+        rmse = np.sqrt(sum((pp - pg) ** 2) / len(pp))
+        perplexity = np.exp(metrics["eval_loss"])
 
         print(f"Global Pearson is {round(p[0], 3)} ({p[1]})")
         print(f"Global Spearman is {round(s[0], 3)} ({s[1]})")
+        print(f"Global RMSE is {round(rmse.item(), 3)}")
+        print(f"Global Perplexity is {round(perplexity, 3)}")
 
         if save_path is not None:
             beam_cols = ["Beam"] if bw == 1 else [f"Beam{i}" for i in range(bw)]
@@ -487,6 +497,8 @@ class Evaluator(CustomTrainer):
             df = pd.concat([df, remaining_props], axis=1)
             df = df.drop_duplicates(subset="GenSequence")
             df.to_csv(os.path.join(save_path))
+
+        return p[0], s[0], rmse, perplexity
 
     def get_seq_eval_fn(self, collator: PropertyCollator, prefix: str) -> Callable:
         """

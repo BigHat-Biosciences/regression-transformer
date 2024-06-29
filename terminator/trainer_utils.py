@@ -31,7 +31,9 @@ def get_trainer_dict(dictionary: Dict[str, Any]) -> Dict[str, Any]:
         "training_logs",
         "train_config",
         "alternating_collator",
-        "report_to"
+        "report_to",
+        "train_metadata",
+        "eval_metadata"
     ]
     keep_dict = {}
     for keep_key in keys_to_keep:
