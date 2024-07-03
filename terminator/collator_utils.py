@@ -1,6 +1,7 @@
-from typing import Optional
+from typing import Optional, List
 
 import torch
+import numpy as np
 
 
 def get_mask(
@@ -72,6 +73,36 @@ def get_mask(
 
         # Since we're replacing non-masked tokens with -100 in the labels tensor instead of skipping them altogether,
         # the i-th predict corresponds to the i-th token.
+        target_mapping[i] = torch.eye(labels.size(1))
+
+    return masked_indices, target_mapping
+
+
+def get_seed_mask(
+    labels: torch.Tensor,
+    plm_probability: float,
+    mask_start_idxs: List[int] = None,
+    mask_end_idxs: List[int] = None,
+    is_mutable_masks: List[List[bool]] = None,
+):
+    """Receives a tensor of seed sequence labels and computes masked_indices and the target
+        mapping for a simple mask where each token after the last separator is masked with
+        probability `plm_probability`."""
+    
+    masked_indices = torch.full(labels.shape, 0, dtype=torch.bool)
+    target_mapping = torch.zeros((labels.size(0), labels.size(1), labels.size(1)), dtype=torch.float32)
+
+    if mask_start_idxs is None: mask_start_idxs = [0] * labels.size(0)
+    if mask_end_idxs is None: mask_end_idxs = [labels.size(1)-1] * labels.size(0)
+    if is_mutable_masks is not None:
+        assert len(is_mutable_masks) == labels.size(0)
+        assert all([(len(mask) == (mask_end_idxs[i]-mask_start_idxs[i]+1)) for i, mask in enumerate(is_mutable_masks)])
+    else:
+        is_mutable_masks = [[True] * (mask_end_idxs[i]-mask_start_idxs[i]+1) for i in range(labels.size(0))]
+
+    for i in range(labels.size(0)):
+        sample_mask = np.logical_and(is_mutable_masks[i], np.random.uniform(size=len(is_mutable_masks[i])) < plm_probability)
+        masked_indices[i, mask_start_idxs[i]:mask_end_idxs[i]+1] = torch.tensor(sample_mask, dtype=torch.bool)
         target_mapping[i] = torch.eye(labels.size(1))
 
     return masked_indices, target_mapping

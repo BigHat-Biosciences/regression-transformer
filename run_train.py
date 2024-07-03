@@ -301,7 +301,7 @@ class RegressionTransformerTrainingPipeline():
         Returns:
             A tuple of train and test dataset.
         """
-
+        
         logger.info("Preparing/reading data...")
         train_data_path = os.path.join(data_dir, train_data_path)
         test_data_path = os.path.join(data_dir, test_data_path)
@@ -368,10 +368,10 @@ class RegressionTransformerTrainingPipeline():
     
 
 if __name__ == "__main__":
-    import debugpy
-    debugpy.listen(5678)
-    print("Waiting for debugger attach...")
-    debugpy.wait_for_client()
+    # import debugpy
+    # debugpy.listen(5678)
+    # print("Waiting for debugger attach...")
+    # debugpy.wait_for_client()
     
     parser = HfArgumentParser(
         (ModelArguments, DataTrainingArguments, CustomTrainingArguments)

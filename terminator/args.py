@@ -201,7 +201,7 @@ class ModelArguments:
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
     """
     model_path: str = field(
-        default=None,
+        default=os.environ.get("SM_CHANNEL_MODEL", None),
         metadata={"help": "Path where the model artifacts are stored. (gt4sd)"},
     )
     checkpoint_name: str = field(

@@ -1141,6 +1141,13 @@ class CustomTrainer(Trainer):
                         logging_loss_scalar = tr_loss_scalar
 
                         # self.log(logs)
+                        if wandb.run is not None:
+                            wandb.log({
+                                'meta': {
+                                    'global_loss': logs["loss"],
+                                    'learning_rate': logs["learning_rate"],
+                                },
+                            }, step=self.global_step)
 
                     if (
                         self.args.evaluation_strategy
@@ -1148,15 +1155,8 @@ class CustomTrainer(Trainer):
                     ):
                         self.property_evaluate()
                         self.generation_evaluate()
-
-                        if wandb.run is not None:
-                            wandb.log({
-                                'train': {
-                                    'global_loss': logs["loss"],
-                                    'learning_rate': logs["learning_rate"],
-                                },
-                            }, step=self.global_step)
-                        
+                        self.generation_from_seed_evaluate()
+            
                     if (
                         self.args.save_steps > 0
                         and self.global_step % self.args.save_steps == 0
@@ -1229,6 +1229,105 @@ class CustomTrainer(Trainer):
         """
         return (x // self.alternate_steps) % 2 == 1
 
+    def generation_from_seed_evaluate(self):
+        """Evaluate conditional generation from a masked seed sequence"""
+        from terminator.evaluator import Evaluator
+        from terminator.datasets import TextDatasetFromList
+        from terminator.collators import ConditionalGenerationEvaluationCollator
+        from .data_utils import apply_cdr_mask, PLACEHOLDER_PROP_VALUE
+
+        # Load seed sequence and cdr mask (Hardcoded for now)
+        # TODO: Load these from a file which is passed as an argument
+        n = 100
+        seed_sequence = 'KVQLVESGGGVVQPGGSLRLSCAASGFSFRNFGMSWVRQAPGKGPEWVSAISGSGADTLYASPVKGRFIISRDNAKNTLYLQMNSLRPEDTAVYYCTIGGSLTRSSQGTLVTVSS'
+        is_mutable_mask = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, True, False, True, True, True, True, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
+        cdr_mask = [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False]
+        # seed_sequence = 'NCCSNCCSNCCS'
+        # is_mutable_mask = [True, True, True, False, False, True, True, True, True, False, False, True]
+        # cdr_mask = [False, True, True, False, False, True, True, True, False, True, True, False]
+        regions = ['fr1', 'cdr1', 'fr2', 'cdr2', 'fr3', 'cdr3', 'fr4']
+        
+        conditioning_range = [0.75]                     # For now, we condition on the 75th percentile of fitness
+        plm_probability = 6. / len(seed_sequence)       # On average, 6 mutations per sequence
+
+        assert len(seed_sequence) == len(is_mutable_mask) == len(cdr_mask)
+        
+        try:
+            properties = self.data_collator.property_tokens
+        except AttributeError:
+            warnings.warn("Collator was not passed explicit properties")
+            return
+        
+        # We can only support single property evaluation for now
+        assert len(properties) == 1
+        prop = properties[0]
+
+        logger.info(f"Evaluating Conditional Generation for property {prop} on seed sequence!")
+
+        # Create a local eval dataset with repeated seed sequence
+        lines = [f"{prop}{PLACEHOLDER_PROP_VALUE:.3f}|{seed_sequence}"] * n
+        eval_dataset = TextDatasetFromList(
+            tokenizer=self.tokenizer,
+            lines=lines,
+            block_size=2**64
+        )
+
+        evaluator = Evaluator(
+            model=self.model,
+            args=self.args,
+            eval_params={},
+            eval_dataset=eval_dataset,
+            tokenizer=self.tokenizer,
+            prediction_loss_only=False,
+        )
+
+        # Create eval generative collator that is tuned to produce variants from the seed sequence
+        collator = ConditionalGenerationEvaluationCollator(
+            tokenizer=self.tokenizer,
+            property_token=prop,
+            conditioning_range=conditioning_range,
+            plm_probability=plm_probability,
+            max_span_length=len(seed_sequence),     # We don't set a max span length
+            is_mutable_mask=is_mutable_mask,
+        )
+
+        # This is a collator for property prediction using the regression transformer itself
+        # TODO: We should eventually pass in BigHat Tm oracle for custom eval instead of using the model itself
+        property_collator = TRAIN_COLLATORS["property"](
+            tokenizer=self.tokenizer,
+            property_tokens=properties,
+            num_tokens_to_mask=[-1],
+        )
+        p, s, rmse, perp, new_samples = evaluator.conditional_generation(
+            collator,
+            prop=prop[1:-1],
+            save_path=None,
+            passed_eval_fn=None,
+            property_collator=property_collator,
+            denormalize_params=None,
+        )
+
+        # Compute number of new samples that are novel
+        new_samples = [s for s in new_samples if s != seed_sequence]
+        new_samples_regions = [apply_cdr_mask(s, cdr_mask) for s in new_samples]
+        new_samples_regions = {reg: [s[reg] for s in new_samples_regions] for reg in regions}
+        num_unique_regions = {
+            f"seed_cg_Num_{reg.capitalize()}_{prop[1:-1]}": len(set(new_samples_regions[reg]))
+            for reg in new_samples_regions.keys()
+        }
+        
+        if wandb.run is not None:
+            wandb.log({
+                "seed_val": {
+                    f"cg_RMSE_{prop[1:-1]}": rmse,
+                    # f"seed_cg_Pearson_{prop[1:-1]}": p,
+                    # f"seed_cg_Spearman_{prop[1:-1]}": s,
+                    f"cg_Perplexity_{prop[1:-1]}": perp,
+                    f"cg_Num_Seq_{prop[1:-1]}": len(new_samples),
+                    **num_unique_regions,
+                }
+            }, step=self.global_step)
+        
     def generation_evaluate(self):
         from terminator.evaluator import Evaluator
 
@@ -1241,6 +1340,8 @@ class CustomTrainer(Trainer):
         # We can only support single property evaluation for now
         assert len(properties) == 1
         prop = properties[0]
+
+        logger.info(f"Evaluating Conditional Generation for property {prop} on validation set!")
         
         evaluator = Evaluator(
             model=self.model,
@@ -1251,26 +1352,29 @@ class CustomTrainer(Trainer):
             prediction_loss_only=False,
         )
         
+        # This is a collator for property prediction using the regression transformer itself
+        # TODO: We should eventually pass in BigHat Tm oracle for custom eval instead of using the model itself
         property_collator = TRAIN_COLLATORS["property"](
             tokenizer=self.tokenizer,
             property_tokens=properties,
             num_tokens_to_mask=[-1],
         )
-        p, s, rmse, perp =  evaluator.conditional_generation(
+        p, s, rmse, perp, _ =  evaluator.conditional_generation(
             self.alternating_collator,
+            prop = prop[1:-1],
             save_path = None,
-            passed_eval_fn = None,                  # We should eventually pass in BigHat Tm oracle for custom eval
+            passed_eval_fn = None,
             property_collator = property_collator,
             denormalize_params = None,
         )            
 
         if wandb.run is not None:
             wandb.log({
-                "val": {
-                    f"cg_RMSE_{prop[1:-1]}": rmse,
-                    f"cg_Pearson_{prop[1:-1]}": p,
-                    f"cg_Spearman_{prop[1:-1]}": s,
-                    f"cg_Perplexity_{prop[1:-1]}": perp,
+                "cg_val": {
+                    f"RMSE_{prop[1:-1]}": rmse,
+                    f"Pearson_{prop[1:-1]}": p,
+                    f"Spearman_{prop[1:-1]}": s,
+                    f"Perplexity_{prop[1:-1]}": perp,
                 }
             }, step=self.global_step)
 
@@ -1372,10 +1476,10 @@ class CustomTrainer(Trainer):
 
             if wandb.run is not None:
                 wandb.log({
-                    "val": {
-                        f"pp_RMSE_{prop[1:-1]}": rs[0],
-                        f"pp_Pearson_{prop[1:-1]}": ps[0],
-                        f"pp_Spearman_{prop[1:-1]}": ss[0],
+                    "pp_val": {
+                        f"RMSE_{prop[1:-1]}": rs[0],
+                        f"Pearson_{prop[1:-1]}": ps[0],
+                        f"Spearman_{prop[1:-1]}": ss[0],
                     }
                 }, step=self.global_step)
 

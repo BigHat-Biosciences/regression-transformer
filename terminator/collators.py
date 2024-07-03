@@ -9,7 +9,7 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.tokenization_utils_base import BatchEncoding
 from transformers.utils import logging
 
-from .collator_utils import get_mask, get_permutation_order
+from .collator_utils import get_mask, get_seed_mask, get_permutation_order
 from .data_utils import PLACEHOLDER_PROP_VALUE
 
 logger = logging.get_logger(__name__)
@@ -540,6 +540,7 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
         conditioning_range: Iterable[Union[float, int]],
         plm_probability: float = 1 / 6,
         max_span_length: int = 5,
+        is_mutable_mask: Optional[bool] = None,
         entity_to_mask: Optional[int] = None,
         entity_separator_token: Optional[str] = None,
     ):
@@ -555,6 +556,9 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
             max_span_length (int, optional): Positive integer determining the maximal
                 span of consequetively masked tokens. The true span length is sampled
                 uniformally from [1, max_span_length]. Defaults to 5.
+            is_mutable_mask (Optional[bool], optional): Mask of booleans that determines
+                whether each token in the sequence can be masked or not. If None, all
+                tokens can be masked. Defaults to None.
             entity_to_mask (int, Optional): The entity-index on which the masking is
                 done. If None, it is assumed that the text after the separator is just
                 one entity.
@@ -580,7 +584,8 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
             )
         )
         self.num_primed = len(self.conditioning_range)
-
+        
+        self.is_mutable_mask = is_mutable_mask
         self.entity_to_mask = entity_to_mask
         self.entity_separator_token = entity_separator_token
         if entity_separator_token:
@@ -593,7 +598,7 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
     ) -> Dict[str, torch.Tensor]:
         if isinstance(examples[0], (dict, BatchEncoding)):
             examples = [e["input_ids"] for e in examples]
-
+        
         batch = _torch_collate_batch(examples, self.tokenizer)
         inputs, perm_mask, target_mapping, labels, true_prop = self.mask_tokens(batch)
         attention_mask = self.attention_mask(inputs)
@@ -653,12 +658,12 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
         )
 
         # Start masking from the beginning of the SMILES/SELFIES
-        masked_indices, target_mapping = get_mask(
+        masked_indices, target_mapping = get_seed_mask(
             labels,
-            max_span_length=self.max_span_length,
             plm_probability=self.plm_probability,
             mask_start_idxs=first_ent_pos,
             mask_end_idxs=last_ent_pos,
+            is_mutable_masks=[self.is_mutable_mask] * labels.size(0),
         )
 
         inputs, masked_indices, non_func_mask, labels = self.mask(

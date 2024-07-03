@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Any, Dict, List, Set, Tuple
 
 import pandas as pd
+import numpy as np
 from pytoda.smiles.transforms import Augment
 from pytoda.transforms import AugmentByReversing
 from sklearn.utils import shuffle
@@ -242,3 +243,18 @@ def get_hf_training_arg_object(training_args: Dict[str, Any]) -> TrainingArgumen
         setattr(hf_train_object, k, v)
 
     return hf_train_object
+
+
+def apply_cdr_mask(sequence, cdr_mask):
+    shift_indices = np.where(np.diff(cdr_mask) != 0)[0]
+    assert len(shift_indices) == 6, "Sequence does not have 3 CDRs and 4 FRs!"
+    shift_indices += 1
+    shift_indices = np.insert(shift_indices, 0, 0)
+    shift_indices = np.append(shift_indices, len(sequence))
+    frs = [sequence[shift_indices[i]:shift_indices[i+1]] for i in range(0, len(shift_indices), 2)]
+    cdrs = [sequence[shift_indices[i]:shift_indices[i+1]] for i in range(1, len(shift_indices)-1, 2)]
+    regions = {
+        "fr1": frs[0], "cdr1": cdrs[0], "fr2": frs[1], "cdr2": cdrs[1],
+        "fr3": frs[2], "cdr3": cdrs[2], "fr4": frs[3]
+    }
+    return regions

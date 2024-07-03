@@ -295,16 +295,19 @@ class Evaluator(CustomTrainer):
     def conditional_generation(
         self,
         collator,
+        prop: str,
         save_path: str = None,
         passed_eval_fn: Callable = None,
         property_collator=None,
-        denormalize_params: Optional[List[float]] = None,
+        denormalize_params: Optional[List[float]] = None,   # Denormalize the property values
+        search_method: str = "sampling"                     # Which search method to use for conditional generation
     ):
         """
         Function to evaluate conditional generation
         NOTE: This only supports a single property at the moment.
         Args:
             collator (): PyTorch collator object
+            prop str: Property to condition on
             save_path (str): Path where results are saved, defaults to None (no saving).
             passed_eval_fn (Callable): Function used to evaluate whether the generated molecules
                 adhere to the property of interest. Defaults to None, in which case the model
@@ -314,15 +317,17 @@ class Evaluator(CustomTrainer):
                 is None
             denormalize_params: The min and max values of the property to denormalize
                 the results.
+            search_method: The search method to use for conditional generation. Defaults to "sampling".
+                Must choose among "greedy", "sampling", "beam".
         """
 
         if passed_eval_fn is None and property_collator is None:
             raise ValueError(
                 "If model should be used for evaluation, property collator is required"
             )
-
-        eval_dataloader = self.get_custom_dataloader(collator, bs=2)
-        prop = collator.property_tokens[0][1:-1]
+        
+        eval_dataloader = self.get_custom_dataloader(collator, bs=self.args.per_device_eval_batch_size)
+        print(f"Using {search_method} search method to generate sequences conditioned on {prop}...")
 
         if passed_eval_fn is not None:
             eval_fn = passed_eval_fn
@@ -353,43 +358,48 @@ class Evaluator(CustomTrainer):
         
         logits = torch.Tensor(logits).cpu()
         input_ids = torch.Tensor(input_ids)
-        # Arbitrary rounding set here on x[0] which is the first property
-        real_prop = [round(denormalize(x[0]), 4) for x in returned["real_property"]]
+        batch_size = logits.shape[0]
 
-        # Naive search (using all tokens)
-        t = time()
-        greedy_preds = self.greedy_search(logits).unsqueeze(0)
-        logger.info(f"Greedy search took {time() - t}")
-        t = time()
-        sampling_preds = self.sampling_search(logits).unsqueeze(0)
-        logger.info(f"Sampling search took {time() - t}")
-        # Just needed for reference
-        bw = self.beam_search.beam_width
-        beam_preds = torch.cat([greedy_preds] * bw, dim=0)
+        if search_method == "greedy":
+            # Naive search (using all tokens)
+            t = time()
+            greedy_preds = self.greedy_search(logits).unsqueeze(0)
+            logger.info(f"Greedy search took {time() - t}")
+            all_preds = torch.zeros(1, *logits.shape[:2]).long()
+            all_preds[0, :, :] = sampling_preds
 
-        # Restrict beam search to affected logits
-        t = time()
-        for sample_idx in tqdm(range(logits.shape[0]), desc="Beam search"):
-            keep_pos = torch.nonzero(
-                input_ids[sample_idx, :] == self.tokenizer.vocab["[MASK]"]
-            ).squeeze(1)
-            relevant_logits = logits[sample_idx, keep_pos, :].unsqueeze(0)
-            if len(relevant_logits.shape) == 2:
-                relevant_logits = relevant_logits.unsqueeze(0)
-            beams, scores = self.beam_search(relevant_logits)
-            beam_preds[:, sample_idx, keep_pos] = (
-                beams.squeeze(dim=0).permute(1, 0).long()
-            )
-        logger.info(f"Beam search took {time() - t}")
+        elif search_method == "sampling":
+            t = time()
+            sampling_preds = self.sampling_search(logits).unsqueeze(0)
+            logger.info(f"Sampling search took {time() - t}")
+            all_preds = torch.zeros(1, *logits.shape[:2]).long()
+            all_preds[0, :, :] = sampling_preds
 
-        all_preds = torch.zeros(2 + beam_preds.shape[0], *logits.shape[:2]).long()
-        all_preds[0, :, :] = greedy_preds
-        all_preds[1, :, :] = sampling_preds
+        if search_method == "beam":
+            # Just needed for reference
+            bw = self.beam_search.beam_width
+            greedy_preds = self.greedy_search(logits).unsqueeze(0)
+            beam_preds = torch.cat([greedy_preds] * bw, dim=0)
 
-        # In case beam width > 0:
-        if bw > 0:
-            for k in range(beam_preds.shape[0]):
-                all_preds[2 + k, :, :] = beam_preds[k, :, :]
+            # Restrict beam search to affected logits
+            t = time()
+            for sample_idx in tqdm(range(logits.shape[0]), desc="Beam search"):
+                keep_pos = torch.nonzero(
+                    input_ids[sample_idx, :] == self.tokenizer.vocab["[MASK]"]
+                ).squeeze(1)
+                relevant_logits = logits[sample_idx, keep_pos, :].unsqueeze(0)
+                if len(relevant_logits.shape) == 2:
+                    relevant_logits = relevant_logits.unsqueeze(0)
+                beams, scores = self.beam_search(relevant_logits)
+                beam_preds[:, sample_idx, keep_pos] = (
+                    beams.squeeze(dim=0).permute(1, 0).long()
+                )
+            logger.info(f"Beam search took {time() - t}")
+            all_preds = torch.zeros(beam_preds.shape[0], *logits.shape[:2]).long()
+            # In case beam width > 0:
+            if bw > 0:
+                for k in range(beam_preds.shape[0]):
+                    all_preds[k, :, :] = beam_preds[k, :, :]
 
         array_len = logits.shape[0] * all_preds.shape[0]
         property_primers = torch.zeros(array_len)
@@ -459,46 +469,15 @@ class Evaluator(CustomTrainer):
         s = spearmanr(pp, pg)
         rmse = np.sqrt(sum((pp - pg) ** 2) / len(pp))
         perplexity = np.exp(metrics["eval_loss"])
+        num_unique_samples = len(set(generated_seqs))
 
         print(f"Global Pearson is {round(p[0], 3)} ({p[1]})")
         print(f"Global Spearman is {round(s[0], 3)} ({s[1]})")
         print(f"Global RMSE is {round(rmse.item(), 3)}")
         print(f"Global Perplexity is {round(perplexity, 3)}")
+        print(f"Generated {num_unique_samples} unique samples")
 
-        if save_path is not None:
-            beam_cols = ["Beam"] if bw == 1 else [f"Beam{i}" for i in range(bw)]
-            search_cols = ["Greedy", "Sampling"] + beam_cols
-            prop = prop.capitalize()
-            save_path = find_safe_path(save_path)
-
-            df = pd.DataFrame(
-                {
-                    "SeedSequence": original_seqs,
-                    f"Seed{prop}": np.tile(
-                        np.repeat(real_prop, collator.num_primed), len(search_cols)
-                    ),
-                    f"Primer{prop}": property_primers,
-                    "GenSequence": generated_seqs,
-                    f"Gen{prop}": property_generations.tolist(),
-                    "Search": np.repeat(
-                        search_cols, collator.num_primed * len(real_prop)
-                    ),
-                }
-            )
-            remaining_props = pd.DataFrame(prop_dicts)
-            replacer = dict(
-                zip(
-                    remaining_props.columns,
-                    [f"Gen{k.capitalize()}" for k in remaining_props.columns],
-                )
-            )
-            remaining_props = remaining_props.rename(columns=replacer)
-            remaining_props = remaining_props.drop(columns=[f"Gen{prop}"])
-            df = pd.concat([df, remaining_props], axis=1)
-            df = df.drop_duplicates(subset="GenSequence")
-            df.to_csv(os.path.join(save_path))
-
-        return p[0], s[0], rmse, perplexity
+        return p[0], s[0], rmse, perplexity, generated_seqs
 
     def get_seq_eval_fn(self, collator: PropertyCollator, prefix: str) -> Callable:
         """
