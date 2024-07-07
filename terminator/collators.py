@@ -976,8 +976,7 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                     new_tokens = new_tokens[
                         2 : torch.where(new_tokens == self.separator_token_idx)[0]
                     ]
-                    inputs[prow, pcol + 1 : sep_idx] = new_tokens
-                    
+
                     if realprop == PLACEHOLDER_PROP_VALUE:
                         sample_weights[prow, pidx] = self.placeholder_sample_weight
                     else:
@@ -987,6 +986,14 @@ class ConditionalGenerationTrainCollator(BaseCollator):
                         sample_weights[prow, pidx] = self.get_sample_weight(
                             realprop, sampled_prop, property_range
                         )
+
+                    try:
+                        inputs[prow, pcol + 1 : sep_idx] = new_tokens
+                    except RuntimeError:
+                        logger.debug(
+                            f"Could not replace property {prop_token}={realprop} with {sampled_prop}"
+                        )
+                        sample_weights[prow, pidx] = 0.0
         
         return inputs, real_property, sample_weights.mean(axis=-1)
 

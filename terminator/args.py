@@ -235,7 +235,7 @@ class ModelArguments:
         },
     )
     cache_dir: Optional[str] = field(
-        default=None,
+        default="/opt/ml/cache",
         metadata={
             "help": "Where do you want to store the pretrained models downloaded from s3"
         },

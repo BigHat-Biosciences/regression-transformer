@@ -40,7 +40,7 @@ export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/.gt4sd/algorithms/rt/"
 
 export SM_MODEL_DIR="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/experiments/test_rt"
 export SM_CHANNEL_TRAINING="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/datasets/rt/capulet-vhh-capulet_new-qc-thermostability-ml-sequences-0_21"
-export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/.gt4sd/algorithms/rt/"
+export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/models/rt_joint_oas_disp/checkpoint-rmse-min-17400"
 
 
 ########## Finetune from a pretrained model ##########

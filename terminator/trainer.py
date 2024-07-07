@@ -2,6 +2,7 @@
 Taken from https://github.com/huggingface/transformers/blob/v3.1.0/src/transformers/trainer.py
 """
 
+import torch.distributed
 import wandb
 import collections
 import gc
@@ -985,6 +986,11 @@ class CustomTrainer(Trainer):
 
         # Distributed training (should be after apex fp16 initialization)
         if self.args.local_rank != -1:
+            torch.distributed.init_process_group(
+                backend="nccl",
+                rank=self.args.local_rank,
+                world_size=self.args.world_size,
+            )
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
                 device_ids=[self.args.local_rank],
@@ -1145,6 +1151,7 @@ class CustomTrainer(Trainer):
                             wandb.log({
                                 'meta': {
                                     'global_loss': logs["loss"],
+                                    'global_step': self.global_step,
                                     'learning_rate': logs["learning_rate"],
                                 },
                             }, step=self.global_step)
@@ -1238,7 +1245,7 @@ class CustomTrainer(Trainer):
 
         # Load seed sequence and cdr mask (Hardcoded for now)
         # TODO: Load these from a file which is passed as an argument
-        n = 100
+        n = 1000
         seed_sequence = 'KVQLVESGGGVVQPGGSLRLSCAASGFSFRNFGMSWVRQAPGKGPEWVSAISGSGADTLYASPVKGRFIISRDNAKNTLYLQMNSLRPEDTAVYYCTIGGSLTRSSQGTLVTVSS'
         is_mutable_mask = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, True, False, True, True, True, True, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
         cdr_mask = [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False]
@@ -1298,7 +1305,7 @@ class CustomTrainer(Trainer):
             property_tokens=properties,
             num_tokens_to_mask=[-1],
         )
-        p, s, rmse, perp, new_samples = evaluator.conditional_generation(
+        p, s, rmse, perp, new_samples, pg_mean, pg_std = evaluator.conditional_generation(
             collator,
             prop=prop[1:-1],
             save_path=None,
@@ -1320,8 +1327,8 @@ class CustomTrainer(Trainer):
             wandb.log({
                 "seed_val": {
                     f"cg_RMSE_{prop[1:-1]}": rmse,
-                    # f"seed_cg_Pearson_{prop[1:-1]}": p,
-                    # f"seed_cg_Spearman_{prop[1:-1]}": s,
+                    f"seed_cg_pred_prop_mean_{prop[1:-1]}": pg_mean,
+                    f"seed_cg_pred_prop_std_{prop[1:-1]}": pg_std,
                     f"cg_Perplexity_{prop[1:-1]}": perp,
                     f"cg_Num_Seq_{prop[1:-1]}": len(new_samples),
                     **num_unique_regions,
@@ -1359,7 +1366,7 @@ class CustomTrainer(Trainer):
             property_tokens=properties,
             num_tokens_to_mask=[-1],
         )
-        p, s, rmse, perp, _ =  evaluator.conditional_generation(
+        p, s, rmse, perp, _, _, _ =  evaluator.conditional_generation(
             self.alternating_collator,
             prop = prop[1:-1],
             save_path = None,

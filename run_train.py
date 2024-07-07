@@ -153,6 +153,14 @@ class RegressionTransformerTrainingPipeline():
             hf_train_object = get_hf_training_arg_object(training_args)
             hf_train_object.local_rank = -1 if training_args['_n_gpu'] <= 1 else hf_train_object.local_rank
 
+            logger.warning(
+                "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s",
+                hf_train_object.local_rank,
+                hf_train_object.device,
+                hf_train_object.n_gpu,
+                bool(hf_train_object.local_rank != -1),
+            )
+            
             trainer = CustomTrainer(
                 model=self.model,
                 args=hf_train_object,

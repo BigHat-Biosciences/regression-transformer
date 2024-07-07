@@ -465,9 +465,26 @@ class Evaluator(CustomTrainer):
         pg = property_generations[property_generations != -1]                       # All the predicted properties for sampled sequences
         print(f"Ratio of invalid sequences: {round(1 - (len(pg)/array_len),2)}")    # Ratio of invalid sequences
         pp = property_primers[property_generations != -1]                           # Filter out invalid predictions
-        p = pearsonr(pp, pg)
-        s = spearmanr(pp, pg)
-        rmse = np.sqrt(sum((pp - pg) ** 2) / len(pp))
+        
+        try:
+            p = pearsonr(pp, pg)
+            s = spearmanr(pp, pg)
+        except Exception as e:
+            print(f"Error: {e}, setting pearson and spearman to nan")
+            p = (np.nan, np.nan)
+            s = (np.nan, np.nan)
+        
+        try:
+            pg_mean, pg_std = np.nanmean(pg), np.nanstd(pg)
+        except Exception as e:
+            print(f"Error: {e}, setting pg_mean and pg_std to nan")
+            pg_mean, pg_std = np.nan, np.nan
+
+        try:
+            rmse = np.sqrt(sum((pp - pg) ** 2) / len(pp))
+        except Exception as e:
+            rmse = torch.tensor(np.nan)
+        
         perplexity = np.exp(metrics["eval_loss"])
         num_unique_samples = len(set(generated_seqs))
 
@@ -475,9 +492,10 @@ class Evaluator(CustomTrainer):
         print(f"Global Spearman is {round(s[0], 3)} ({s[1]})")
         print(f"Global RMSE is {round(rmse.item(), 3)}")
         print(f"Global Perplexity is {round(perplexity, 3)}")
+        print(f"Samples have mean predicted property of {round(pg_mean, 3)} with std {round(pg_std, 3)}")
         print(f"Generated {num_unique_samples} unique samples")
-
-        return p[0], s[0], rmse, perplexity, generated_seqs
+        
+        return p[0], s[0], rmse, perplexity, generated_seqs, pg_mean, pg_std
 
     def get_seq_eval_fn(self, collator: PropertyCollator, prefix: str) -> Callable:
         """
