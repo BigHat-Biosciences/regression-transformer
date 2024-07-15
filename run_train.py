@@ -175,8 +175,15 @@ class RegressionTransformerTrainingPipeline():
                 **custom_trainer_params,
             )
 
-            trainer.train(model_path=params["output_dir"])
-            trainer.save_model()  # type: ignore
+            if training_args["do_sample"]:
+                samples = trainer.generation_from_seed_evaluate(
+                    conditional_values = ["0.750"],
+                    n = training_args["num_samples"],
+                    num_mutation=48.
+                )
+            else:
+                trainer.train(model_path=params["output_dir"])
+                trainer.save_model()  # type: ignore
 
         except Exception:
             logger.exception(

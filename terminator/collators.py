@@ -206,7 +206,7 @@ class MaskedTextCollator(BaseCollator):
     NOTE: The masking token has to be tokenizer.mask_token and tokenizer.mask_token_id
         has to be implemented
 
-    This can be useful in in inference mode and model deployment
+    This can be useful in inference mode and model deployment
     """
 
     def __init__(self, tokenizer: PreTrainedTokenizer):
@@ -474,8 +474,11 @@ class PropertyCollator(SinglePropertyCollator):
         if mask_token_order is None:
             mask_token_order = [None] * len(property_tokens)
 
-        assert len(property_tokens) == len(num_tokens_to_mask), "Lengths must match"
-        assert len(property_tokens) == len(mask_token_order), "Lengths must match"
+        # assert len(property_tokens) >= len(num_tokens_to_mask), "Lengths must match"
+        # assert len(property_tokens) >= len(mask_token_order), "Lengths must match"
+        if len(num_tokens_to_mask) < len(property_tokens):
+            # NOTE: For now, we just don't mask the other properties
+            property_tokens = property_tokens[: len(num_tokens_to_mask)]
 
         self.tokenizer = tokenizer
         self.property_tokens = property_tokens
@@ -601,6 +604,7 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
         
         batch = _torch_collate_batch(examples, self.tokenizer)
         inputs, perm_mask, target_mapping, labels, true_prop = self.mask_tokens(batch)
+
         attention_mask = self.attention_mask(inputs)
         return {
             "input_ids": inputs,
@@ -657,6 +661,10 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
             inputs, self.entity_to_mask
         )
 
+        if first_ent_pos[0] == primer_end_pos[0]+1:
+            # HACK: For some reason this is needed to avoid bug in masking
+            last_ent_pos = [last_ent_pos[0] + 1] * len(last_ent_pos)
+
         # Start masking from the beginning of the SMILES/SELFIES
         masked_indices, target_mapping = get_seed_mask(
             labels,
@@ -712,10 +720,12 @@ class ConditionalGenerationEvaluationCollator(BaseCollator):
                     inputs[i, property_token_pos[i] + 1 : separator_token_pos[i]]
                 ).split(" ")
             )
+            num_digits = separator_token_pos[i] - property_token_pos[i] - 1
 
             for pidx, primer in enumerate(self.conditioning_range):
                 primed_inputs[(i * self.num_primed) + pidx, :] = inputs[i]
                 keep = self.tokenizer(primer)["input_ids"][2:-2]
+                assert num_digits+1 == len(keep), "Primer length does not match property"
                 primed_inputs[
                     (i * self.num_primed) + pidx,
                     property_token_pos[i] + 1 : property_token_pos[i] + 1 + len(keep),

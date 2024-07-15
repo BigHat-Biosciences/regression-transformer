@@ -16,7 +16,7 @@ from transformers.training_args import TrainingArguments
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-PLACEHOLDER_PROP_VALUE = 999
+PLACEHOLDER_PROP_VALUE = 9.999
 TRANSFORM_FACTORY = {"SELFIES": encoder}
 AUGMENT_FACTORY = {
     "SMILES": Augment(),

@@ -39,15 +39,14 @@ export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/.gt4sd/algorithms/rt/"
 
 
 export SM_MODEL_DIR="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/experiments/test_rt"
-export SM_CHANNEL_TRAINING="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/datasets/rt/capulet-vhh-capulet_new-qc-thermostability-ml-sequences-0_21"
+export SM_CHANNEL_TRAINING="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/datasets/rt/oas_and_capulet_382_3ct_tm_imputed"
 export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/models/rt_joint_oas_disp/checkpoint-rmse-min-17400"
 
 
 ########## Finetune from a pretrained model ##########
 python run_train.py \
 	--model_path $PRETRAINED_MODEL_PATH \
-    --train_data_path train.csv \
-	--train_metadata_path train_metadata.csv \
+    --train_data_path val.csv \
     --test_data_path val.csv \
 	--do_train True \
 	--do_eval True \
@@ -62,7 +61,7 @@ python run_train.py \
 	--batch_size 16 \
 	--per_device_train_batch_size 16 \
   	--per_device_eval_batch_size 16 \
-	--eval_steps 100 \
+	--eval_steps 2 \
 	--logging_steps 200 \
 	--alternate_steps 50 \
 	--gradient_accumulation_steps 1 \

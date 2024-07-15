@@ -1162,7 +1162,18 @@ class CustomTrainer(Trainer):
                     ):
                         self.property_evaluate()
                         self.generation_evaluate()
-                        self.generation_from_seed_evaluate()
+
+                        self.generation_from_seed_evaluate(conditional_values=[0.75, 0.1])
+                        self.generation_from_seed_evaluate(conditional_values=[0.75, 0.5])
+                        self.generation_from_seed_evaluate(conditional_values=[0.75, 0.9])
+
+                        self.generation_from_seed_evaluate(conditional_values=[0.85, 0.1])
+                        self.generation_from_seed_evaluate(conditional_values=[0.85, 0.5])
+                        self.generation_from_seed_evaluate(conditional_values=[0.85, 0.9])
+
+                        self.generation_from_seed_evaluate(conditional_values=[0.95, 0.1])
+                        self.generation_from_seed_evaluate(conditional_values=[0.95, 0.5])
+                        self.generation_from_seed_evaluate(conditional_values=[0.95, 0.9])
             
                     if (
                         self.args.save_steps > 0
@@ -1236,43 +1247,54 @@ class CustomTrainer(Trainer):
         """
         return (x // self.alternate_steps) % 2 == 1
 
-    def generation_from_seed_evaluate(self):
+    def generation_from_seed_evaluate(
+        self,
+        conditional_values: Optional[List[float]]=[0.75],
+        method="denoising",
+        n=1000,
+        temperature=1.0,
+        num_mutation=6,
+    ):
         """Evaluate conditional generation from a masked seed sequence"""
         from terminator.evaluator import Evaluator
         from terminator.datasets import TextDatasetFromList
         from terminator.collators import ConditionalGenerationEvaluationCollator
         from .data_utils import apply_cdr_mask, PLACEHOLDER_PROP_VALUE
-
+        
         # Load seed sequence and cdr mask (Hardcoded for now)
         # TODO: Load these from a file which is passed as an argument
-        n = 1000
         seed_sequence = 'KVQLVESGGGVVQPGGSLRLSCAASGFSFRNFGMSWVRQAPGKGPEWVSAISGSGADTLYASPVKGRFIISRDNAKNTLYLQMNSLRPEDTAVYYCTIGGSLTRSSQGTLVTVSS'
         is_mutable_mask = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, True, False, True, True, True, True, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
         cdr_mask = [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False]
-        # seed_sequence = 'NCCSNCCSNCCS'
-        # is_mutable_mask = [True, True, True, False, False, True, True, True, True, False, False, True]
-        # cdr_mask = [False, True, True, False, False, True, True, True, False, True, True, False]
         regions = ['fr1', 'cdr1', 'fr2', 'cdr2', 'fr3', 'cdr3', 'fr4']
         
-        conditioning_range = [0.75]                     # For now, we condition on the 75th percentile of fitness
-        plm_probability = 6. / len(seed_sequence)       # On average, 6 mutations per sequence
-
-        assert len(seed_sequence) == len(is_mutable_mask) == len(cdr_mask)
+        main_prop_val = conditional_values[0]
+        conditioning_range = [main_prop_val]                        # HACK: Only compute self consistency loss on first property for now
+        plm_probability = num_mutation / len(seed_sequence)         # On average, 6 mutations per sequence
         
         try:
             properties = self.data_collator.property_tokens
         except AttributeError:
             warnings.warn("Collator was not passed explicit properties")
             return
-        
-        # We can only support single property evaluation for now
-        assert len(properties) == 1
-        prop = properties[0]
 
+        assert len(properties) == len(conditional_values), "Number of properties must match number of conditional values"
+        assert len(seed_sequence) == len(is_mutable_mask) == len(cdr_mask)
+        
+        # We can only support single property evaluation for now, other properties are unmasked during pp
+        # assert len(properties) == 1
+        prop = properties[0]
+        pretty_prop_vals = ",".join([f"{prop[1:-1]}={val}" for prop, val in zip(properties, conditional_values)])
+        
         logger.info(f"Evaluating Conditional Generation for property {prop} on seed sequence!")
 
         # Create a local eval dataset with repeated seed sequence
-        lines = [f"{prop}{PLACEHOLDER_PROP_VALUE:.3f}|{seed_sequence}"] * n
+        line = f"{prop}{PLACEHOLDER_PROP_VALUE:.3f}|"
+        for nprop, nval in zip(properties[1:], conditional_values[1:]):
+            line += f"{nprop}{nval:.3f}|"
+        line += seed_sequence
+
+        lines = [line] * n
         eval_dataset = TextDatasetFromList(
             tokenizer=self.tokenizer,
             lines=lines,
@@ -1319,21 +1341,23 @@ class CustomTrainer(Trainer):
         new_samples_regions = [apply_cdr_mask(s, cdr_mask) for s in new_samples]
         new_samples_regions = {reg: [s[reg] for s in new_samples_regions] for reg in regions}
         num_unique_regions = {
-            f"seed_cg_Num_{reg.capitalize()}_{prop[1:-1]}": len(set(new_samples_regions[reg]))
+            f"seed_cg_Num_{reg.capitalize()}": len(set(new_samples_regions[reg]))
             for reg in new_samples_regions.keys()
         }
         
         if wandb.run is not None:
             wandb.log({
-                "seed_val": {
-                    f"cg_RMSE_{prop[1:-1]}": rmse,
-                    f"seed_cg_pred_prop_mean_{prop[1:-1]}": pg_mean,
-                    f"seed_cg_pred_prop_std_{prop[1:-1]}": pg_std,
-                    f"cg_Perplexity_{prop[1:-1]}": perp,
-                    f"cg_Num_Seq_{prop[1:-1]}": len(new_samples),
+                f"{pretty_prop_vals}": {
+                    f"cg_RMSE": rmse,
+                    f"seed_cg_pred_prop_mean": pg_mean,
+                    f"seed_cg_pred_prop_std": pg_std,
+                    f"cg_Perplexity": perp,
+                    f"cg_Num_Seq": len(new_samples),
                     **num_unique_regions,
                 }
             }, step=self.global_step)
+
+        return new_samples
         
     def generation_evaluate(self):
         from terminator.evaluator import Evaluator
@@ -1345,7 +1369,7 @@ class CustomTrainer(Trainer):
             return
 
         # We can only support single property evaluation for now
-        assert len(properties) == 1
+        # assert len(properties) == 1
         prop = properties[0]
 
         logger.info(f"Evaluating Conditional Generation for property {prop} on validation set!")
@@ -1373,7 +1397,7 @@ class CustomTrainer(Trainer):
             passed_eval_fn = None,
             property_collator = property_collator,
             denormalize_params = None,
-        )            
+        )
 
         if wandb.run is not None:
             wandb.log({

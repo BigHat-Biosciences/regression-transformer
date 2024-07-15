@@ -265,4 +265,4 @@ class BeamSearch(Search):
         return (token_beams, updated_beams)
 
 
-SEARCH_FACTORY = {"greedy": GreedySearch, "beam": BeamSearch, "sample": SamplingSearch}
+SEARCH_FACTORY = {"greedy": GreedySearch, "beam": BeamSearch, "sample": SamplingSearch, "denoise": SamplingSearch, "gibbs": SamplingSearch}

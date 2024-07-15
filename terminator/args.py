@@ -41,6 +41,14 @@ class CustomTrainingArguments(TrainingArguments):
     evaluate_during_training: str2bool = field(default=False, metadata={"help": "Run evaluation during training at each logging step."})
     overwrite_output_dir: str2bool = field(default=False, metadata={"help": "Overwrite the content of the output directory"})
 
+    # Custom arguments
+    do_sample: str2bool = field(
+        default=False, metadata={"help": "Whether to sample from the model during evaluation."}
+    )
+    num_samples: int = field(
+        default=1000, metadata={"help": "Number of samples to generate during evaluation."}
+    )
+
     output_dir: str = field(
         metadata={"help": "The output directory where the model predictions and checkpoints will be written."},
         default=os.environ["SM_MODEL_DIR"],

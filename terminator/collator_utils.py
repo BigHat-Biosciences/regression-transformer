@@ -96,13 +96,13 @@ def get_seed_mask(
     if mask_end_idxs is None: mask_end_idxs = [labels.size(1)-1] * labels.size(0)
     if is_mutable_masks is not None:
         assert len(is_mutable_masks) == labels.size(0)
-        assert all([(len(mask) == (mask_end_idxs[i]-mask_start_idxs[i]+1)) for i, mask in enumerate(is_mutable_masks)])
+        assert all([(len(mask) == (mask_end_idxs[i]-mask_start_idxs[i])) for i, mask in enumerate(is_mutable_masks)])
     else:
-        is_mutable_masks = [[True] * (mask_end_idxs[i]-mask_start_idxs[i]+1) for i in range(labels.size(0))]
+        is_mutable_masks = [[True] * (mask_end_idxs[i]-mask_start_idxs[i]) for i in range(labels.size(0))]
 
     for i in range(labels.size(0)):
         sample_mask = np.logical_and(is_mutable_masks[i], np.random.uniform(size=len(is_mutable_masks[i])) < plm_probability)
-        masked_indices[i, mask_start_idxs[i]:mask_end_idxs[i]+1] = torch.tensor(sample_mask, dtype=torch.bool)
+        masked_indices[i, mask_start_idxs[i]:mask_end_idxs[i]] = torch.tensor(sample_mask, dtype=torch.bool)
         target_mapping[i] = torch.eye(labels.size(1))
 
     return masked_indices, target_mapping
