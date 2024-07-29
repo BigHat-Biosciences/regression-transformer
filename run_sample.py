@@ -35,13 +35,25 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=1000, help="The number of samples to generate")
     parser.add_argument("--conditioning_value", type=float, nargs="+", default=[0.5], help="The value to condition on")
     parser.add_argument("--property_tokens", type=str, nargs="+", default=["<tm>"], help="The property tokens to condition on")
+    parser.add_argument("--seed_construct", type=str, required=True)
 
     args = parser.parse_args()
     print(args)
 
-    lead_seq = 'KVQLVESGGGVVQPGGSLRLSCAASGFSFRNFGMSWVRQAPGKGPEWVSAISGSGADTLYASPVKGRFIISRDNAKNTLYLQMNSLRPEDTAVYYCTIGGSLTRSSQGTLVTVSS'
-    mutable_res_mask = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, True, False, True, True, True, True, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
-    cdr_mask = [False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, True, True, True, True, True, True, False, False, False, False, False, False, False, False, False, False, False]
+
+    ############################# SETUP SEED SEQUENCE #############################
+    os.environ["PARTNER"] = "capulet"
+    os.environ["DEPLOYMENT_ENVIRONMENT"] = "prod"
+    from bh.biocore.sequences.constructs import ConstructSvc
+    from conditional_plm.data.capulet import (
+        get_capulet_mutable_cdr_mask,
+        get_capulet_reference_sequence,
+        get_capulet_cdr_mask
+    )
+
+    lead_seq = ConstructSvc.get_by_name(args.seed_construct).get_part_aa_sequence()
+    mutable_res_mask = get_capulet_mutable_cdr_mask(lead_seq)
+    cdr_mask = get_capulet_cdr_mask(lead_seq)
 
     assert len(args.property_tokens) == len(args.conditioning_value), "Number of property tokens must match number of conditioning values"
 
@@ -61,19 +73,17 @@ if __name__ == "__main__":
             'allowed_sampling_tokens': 'ACDEFGHIKLMNPQRSTVWY'
         },
         inference_config={
+            "normalize": [False] * len(args.property_tokens),
             "property_token": args.property_tokens,
             "property_ranges": { p: [0., 1.] for p in args.property_tokens },
-            "max_span_length": 7,
+            "max_span_length": len(lead_seq),   # We allow any masking span length
             "property_mask_length": { p: 5 for p in args.property_tokens }
         }
     )
     
     ######## Sample from the model ########
-    os.environ["PARTNER"] = "capulet"
-    os.environ["DEPLOYMENT_ENVIRONMENT"] = "prod"
-    from conditional_plm.oracles import ThermoOracle
-    from conditional_plm.data.capulet import get_capulet_reference_sequence
-    from conditional_plm.data.humanness import biophi_v_humannesses, DEFAULT_MIN_PERCENT_SUBJECTS
+    from conditional_plm.oracles import ThermoOracle, AffinityOracle
+    from conditional_plm.data.humanness import biophi_v_humanness, biophi_v_humannesses, DEFAULT_MIN_PERCENT_SUBJECTS
 
     samples = set()
 
@@ -92,22 +102,36 @@ if __name__ == "__main__":
     for i, prop in enumerate(args.property_tokens):
         print(f"Mean RT {prop}: {np.mean([sample[1][i] for sample in samples])}")
     
+
     ######## Compute properties ########
     samples = [sample[0] for sample in samples]
     therm_oracle = ThermoOracle.load_default()
+    aff_oracle = AffinityOracle.load_default()
     ref_seq = get_capulet_reference_sequence()
 
-    tm_preds = therm_oracle.forward(samples, ref_seq)
+    lead_kdpe = aff_oracle.forward([lead_seq], ref_seq).cpu().detach().item()
+    lead_tm = therm_oracle.forward([lead_seq], ref_seq).cpu().detach().item()
+    lead_oasis = biophi_v_humanness(lead_seq).get_oasis_percentile(DEFAULT_MIN_PERCENT_SUBJECTS / 100)
 
+    kdpe_preds = aff_oracle.forward(samples, ref_seq)
+    tm_preds = therm_oracle.forward(samples, ref_seq)
+    oasis_vals = np.array([
+        obj.get_oasis_percentile(DEFAULT_MIN_PERCENT_SUBJECTS / 100)
+        for obj in biophi_v_humannesses(samples)
+    ])
+    
     df = pd.DataFrame({'sequence': samples})
     df['tm_mean'] = tm_preds.cpu().detach().numpy()
-    print(f"Mean TM: {np.mean(df['tm_mean'])}")
+    df['kdpe_mean'] = kdpe_preds.cpu().detach().numpy()
+    df['oasis_percentile'] = oasis_vals
 
-    biophi_objs = biophi_v_humannesses(samples)
-    oasis_percentile = [obj.get_oasis_percentile(DEFAULT_MIN_PERCENT_SUBJECTS / 100) for obj in biophi_objs]
-    df['oasis_percentile'] = oasis_percentile
+    print(f"Conditioning on {args.conditioning_value}")
+    print(f"Seed KDPE: {lead_kdpe}")
+    print(f"Mean KDPE: {np.mean(df['kdpe_mean'])}")
+    print(f"Seed TM: {lead_tm}")
+    print(f"Mean TM: {np.mean(df['tm_mean'])}")
+    print(f"Seed OASIS percentile: {lead_oasis}")
     print(f"Mean OASIS percentile: {np.mean(df['oasis_percentile'])}")
 
-    breakpoint()
     os.makedirs(args.output_dir, exist_ok=True)
     df.to_csv(os.path.join(args.output_dir, f"{args.run_name}.csv"), index=False)
