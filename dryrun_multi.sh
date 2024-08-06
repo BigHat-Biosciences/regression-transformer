@@ -1,15 +1,15 @@
 #!/bin/bash
 
 export SM_MODEL_DIR="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/experiments/test_rt"
-export SM_CHANNEL_TRAINING="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/datasets/rt/oas_and_capulet_382_3ct_with_oracle_confidence"
-export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/models/rt_joint_oas_disp/checkpoint-rmse-min-17400"
+export SM_CHANNEL_TRAINING="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/datasets/rt/oas_display_imputed"
+export PRETRAINED_MODEL_PATH="/home/ec2-user/other/slu/projects/bh-experimental/wizard_hat/conditional_plm/res/models/rt/boman"
 
 
 ########## Finetune from a pretrained model ##########
 python run_train.py \
 	--model_path $PRETRAINED_MODEL_PATH \
-    --train_data_path tm_train.csv \
-	--train_metadata_path tm_train_metadata.csv \
+    --train_data_path train.csv \
+	--train_metadata_path train_metadata.csv \
     --test_data_path tm_val.csv \
 	--do_train True \
 	--do_eval True \

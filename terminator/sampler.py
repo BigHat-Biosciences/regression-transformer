@@ -405,7 +405,7 @@ class ConditionalGenerator:
                 Stored as a Sequence (str), e.g., '<qed>0.727'.
         """
         batch_size = batch_size or self.batch_size
-        num_batches = len(contexts) // batch_size
+        num_batches = (len(contexts) // batch_size) + 1
         results = []
 
         for i in tqdm(range(num_batches)):
@@ -416,7 +416,7 @@ class ConditionalGenerator:
             # Forward pass
             input_ids = inputs["input_ids"].cpu()
             outputs = self.model(map_tensor_dict(inputs, self.device))
-
+            
             # Obtain the singular predictions
             prediction = self.search(outputs["logits"].detach())
             results.extend(self.compile_regression_result(input_ids, prediction))
